@@ -1,0 +1,54 @@
+
+function loc
+  ; ASTEROID STRIKES THE SURFACE IN A RANDOM LOCATION
+  loc = round([randomu(!null)*500e3, randomu(!null)*500e3]) ; precision to the nearest meter of impact
+  
+  return, loc
+end 
+
+pro impact,r,impact_site
+  impact_loc = round(loc()/1000)
+  impact_locx = impact_loc[0]
+  impact_locy = impact_loc[1]
+  index = (round(randomu(seed)*r.length) lt r.length -1) ?  round(randomu(seed)*r.length): round(randomu(seed)*r.length)-1
+  asteroid_radius = r[index]; in km)
+  crator_radius = 10*asteroid_radius;km
+  crator_depth = 0.04*(2*crator_radius);km
+  print, "Location: ",impact_loc
+  print, "Asteroid Radius: ", asteroid_radius
+  print, "Crator Radius: ", crator_radius
+  print, "Crator Depth: ", crator_depth
+  
+  for x =0,499 do begin; in km
+    for y =0,499 do begin; km
+      ;if (x-impact_locx)^2+(y-impact_locy)^2 eq crator_radius^2 then impact_site[x,y]=impact_site[x,y]-crator_depth
+      if (x-impact_locx)^2+(y-impact_locy)^2 lt crator_radius^2 then impact_site[x,y]=impact_site[x,y]-crator_depth
+    endfor
+  endfor
+end
+
+
+pro crator, impact_site
+closewin
+impact_site = fltarr(500,500)+600
+
+; the distrobution of asteroids is given by a power law
+; ASSUMPTION: the power is -3, similar to that of the measurement of the kuiper belt to be -4 +/- 0.5
+a  = findgen(1e6, start = 1)
+aa = 1e13*a^(-4)
+; this gives us a large sample of asteroids of various sizes that come from a power law distrobution. 
+; but the radii in this sample include asteroids smaller than 10km and larger than 300km. So from this 
+; sample we select only those that are larger than Dave's lower bound and smaller than 300km (so that we can see the
+; impact on our 500km^2 area. 
+r = round(aa[where(aa gt 10 and aa lt 300)])
+stop
+
+
+for t  = 0,100 do begin
+  impact, r,impact_site
+  atv, impact_site
+endfor
+S = surface(impact_site, /overplot, shading = 1, skirt = 1, style =2)
+
+end
+

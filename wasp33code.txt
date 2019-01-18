@@ -1,0 +1,775 @@
+import glob, os
+import pyfits
+from astropy.io import fits
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+# For this photometry code, we aim to establish a light curve
+#for the star WASP33. We have 213 images from which we will do 
+#relative photometry between our target, WASP33, and a group of 
+#comparison stars. 
+#
+#We read in the position of the target star in each image, as a list 
+#of coordinates. From there, we can calculate the relative positions 
+#of each comparison star, and create a list for each star's postion in 
+#each of the images. 
+#
+#We then put a square aperature centered at the location of each star, 
+#including the target star. We add all the flux (ADU) values within that 
+#aperature. We build a square doughnut aperature around this target aperature
+#with a 5 pixel buffer between them. The sky aperature is actually built from
+#four smaller rectangular aperatures around the target/buffer area.
+#we take the sky flux per pixel to be the median of the values in that sky 
+#aperature. With about 82,000 pixels inside it, the uncertainty is negligable
+#on the value of sky flux per pixel within the sky aperature. 
+#we then calculate the flux from the star alone as that which was in the 
+#target aperature minus the sky flux per pixel times the area of the target 
+#aperature. This is how the flux for the target star is calculated. The 
+#uncertainty on this value is taken solely as the square root of the flux since 
+#the uncertainty on the sky flux in the aperature is nearly zero. 
+#
+#With the sky-reduced flux of each comparison star, we then take the average of 
+#the group which will act as a single 'comparison object' against which we 
+#compare the flux of our target star. The uncertainty of the averaged flux is 
+#taken as ______________________________Using only comparison stars which behave 
+#comparably over time (no anomolous flux values that are not also present in the 
+#entire group), we then subtract the "averaged comparison flux" from that of 
+#the target star, and come to a reasonably flat light curve for the target, save 
+#the charactoristic transit dip when WASP33b transits in front of WASP33. With 
+#the 213 images reduced each to a single number and an uncertainty, we then
+#smooth the light curve by averaging every four data points into a single data
+#point, and reduce the uncertainty of each smoothed point by a factor of 1/2. 
+#
+#At the deepest part of the transit phase of the light curve for the target star
+#we can find the percentage of light blocked by the exoplanet WASP33b. That 
+#That percentage of light blocked is proportional to the relative radial size 
+#of the exoplanet vs. the target star. 
+
+
+
+
+
+#######################################
+#  Positions of each star in the images
+#
+#                           TARGET STAR
+#######################################
+
+# From the image list text file, read each line into a variable called 'imlist'
+# From the list of the target star's location, read each line (position) into a variable called 'tgtlocs'
+
+# For the scopius network:
+#os.chdir("/home/caba5860/astr3510/wasp33r")
+#tgtlocfile = "/home/caba5860/astr3510/wasp33r/targetmaxpix.txt"
+#imglist = "/home/caba5860/astr3510/wasp33r/imlist.txt"
+#os.chdir("C:\Users\Casey Backes\Documents\wasp")
+
+
+# For my machine at home:
+os.chdir("C:\Users\Casey Backes\Documents\wasp")
+tgtlocfile = 'targetmaxpix.txt'
+imglist = 'imlist.txt'
+
+
+with open(tgtlocfile) as f:
+	tgtlocs = [x.strip('\n') for x in f.readlines()]
+        tgtlocs = filter(None, tgtlocs)
+        #print(tgtlocs)
+with open(imglist) as f: 
+	imlist = [x.strip('\n') for x in f.readlines()]
+	#print(imlist)
+print( "Access granted:'imlist' and 'tgtlocs'.")
+
+
+###############################
+#		COMPARISON STAR
+###############################
+# With the target star's location known, we can easily find the companion star by telling python to look left 'x' pixels, and down 'y' pixels. The image has only translated across the ccd in the -x_hat direction, so looking 'x,y' pixles down and left, we will automatically have the companion star's location at its (damn near) center. 
+
+
+# the companion is always at a specific offset to the target star:(x-444,y-488) 
+complocs = []
+complocs2 = []
+complocs3 = []
+complocs4 = []
+
+for tgtloc in tgtlocs:
+	#break down the string to two integer values
+	tgtloc = tgtloc.split(',')
+	tgtlocx = int(tgtloc[0])
+	tgtlocy = int(tgtloc[1])
+ 
+        # first comparision star
+	#do the shift for x
+	complocx = tgtlocx - 444
+	#do the shift for y
+	complocy = tgtlocy - 488
+	#append the coordinates to the complocs list
+	coord = str(str(complocx)+','+str(complocy))
+    	complocs.append(coord)
+        
+        # second comp star
+        complocx = tgtlocx +92
+        complocy = tgtlocy - 723
+        coord = str(str(complocx)+','+str(complocy))
+        complocs2.append(coord)
+
+        # third comp star
+        complocx = tgtlocx -1103
+        complocy = tgtlocy - 1850
+        coord = str(str(complocx)+','+str(complocy))
+        complocs3.append(coord)
+
+        # fourth comp star
+        complocx = tgtlocx -1480
+        complocy = tgtlocy - 842
+        coord = str(str(complocx)+','+str(complocy))
+        complocs4.append(coord)
+
+# Comparison star locations stored in 'complocs' 
+# Target star locations stored in 'tgtlocs'
+
+
+
+#################################
+#    Photometry Analysis on Stars
+#  
+#                     PARAMETERS
+#################################
+#FWHM for companion is 16, 3xFWHM =48
+#FWHM for target is about 16 as well, 3xFWHM = 48
+#Use a square aperature of about 50 pixel side length for both stars
+
+# determine flux of target star
+FWHM = 10
+#for each image in imlist
+#   set an aperature equal to 3xFWHM centered on tgt location
+#   total flux = add up all the array (image) values within that box
+#   set a buffer of 5 pixels
+#   set a sky aperature of an additional 100pixels
+sky_ap = []
+photometry_data = open("Photometry Data.txt","w")
+mytxthdr = "Image Name, Target Flux, dTarget Flux, Sky(T), Companion Flux, dCompanion Flux, Sky(C), Vmag(T), Date(JD)"
+photometry_data.write(mytxthdr)
+photometry_data.write('\n')
+
+obs_date = []
+
+tgt_flux_array = []
+tgt_aps = []
+dtgt_flux_array = []
+
+comp_flux_array = []
+comp_aps = []
+dcomp_flux_array =[]
+
+comp2_flux_array = []
+comp2_aps = []
+dcomp2_flux_array = []
+
+comp3_flux_array = []
+comp3_aps = []
+dcomp3_flux_array = []
+
+comp4_flux_array = []
+comp4_aps = []
+dcomp4_flux_array =[]
+
+comp_group_flux_array = []
+dcomp_group_flux_array = []
+
+dM = []
+dF = []
+
+# Establish a buffer and sky app radius around the stars
+buffer_space = 5
+sky_radius = 100 # more like 'annulus', it goes 100px past the buffer
+
+
+###############################
+#   INTERATIVE IMAGE PHOTOMETRY
+###############################
+# Do photometry for each image in the folder (currently 213)
+for i in np.arange(0,212,1) :
+
+    #open the image and get the header and image data array
+    hdulist = fits.open(imlist[i])
+    header  = hdulist[0].header
+    data = hdulist[0].data
+    ###  PARAMETERS
+
+    # Exposure time and observation time/date(JD)
+    exp_time = hdulist[0].header['EXPOSURE']
+    obsdate = hdulist[0].header['JD']
+    obs_date = np.append(obs_date, obsdate) 
+    #print(obsdate)
+  
+
+    ############################
+    #             TARGET STAR
+    ############################
+	
+    # Flux target aperature of 2.5xFWHM:
+    tgtlocation = tgtlocs[i].split(',')
+    tgtlocation_x, tgtlocation_y = int(tgtlocation[1]), int(tgtlocation[0])
+  
+    tgt_ap = hdulist[0].data[tgtlocation_x-2.5*FWHM:tgtlocation_x+2.5*FWHM, tgtlocation_y-2.5*FWHM:tgtlocation_y+2.5*FWHM]
+    tgt_aps = np.append(tgt_aps, tgt_ap)   
+    tgt_ap_area = len(list(tgt_ap.flat))
+    tgt_flux = sum(list(hdulist[0].data[tgtlocation_x-2.5*FWHM:tgtlocation_x+2.5*FWHM, tgtlocation_y-2.5*FWHM:tgtlocation_y+2.5*FWHM]))
+    tgt_flux_total = sum(list(tgt_flux.flat))
+    
+
+    # Put all sky pixels in an empty array
+    sky_aperature_tgt = []
+
+    # Establish sections of the sky aperature, combine, and take the median of values in the sky region
+    sky_ap1 = hdulist[0].data[tgtlocation_x-2.5*FWHM-buffer_space-sky_radius:tgtlocation_x-2.5*FWHM-buffer_space, tgtlocation_y - 2.5*FWHM -buffer_space: tgtlocation_y+2.5*FWHM+buffer_space]
+    sky_ap2 = hdulist[0].data[tgtlocation_x+2.5*FWHM+buffer_space:tgtlocation_x+2.5*FWHM+buffer_space+sky_radius, tgtlocation_y - 2.5*FWHM -buffer_space: tgtlocation_y+2.5*FWHM+buffer_space]
+    sky_ap3 = hdulist[0].data[tgtlocation_x-2.5*FWHM-buffer_space-sky_radius:tgtlocation_x+2.5*FWHM+buffer_space+sky_radius, tgtlocation_y +2.5*FWHM+ buffer_space: tgtlocation_y +2.5*FWHM+ buffer_space+sky_radius]
+    sky_ap4 = hdulist[0].data[tgtlocation_x-2.5*FWHM-buffer_space-sky_radius:tgtlocation_x+2.5*FWHM+buffer_space+sky_radius, tgtlocation_y -2.5*FWHM-buffer_space-sky_radius: tgtlocation_y -2.5*FWHM- buffer_space]
+    
+    sky_aperature_tgt = np.append(sky_aperature_tgt, list(sky_ap1.flat))
+    sky_aperature_tgt = np.append(sky_aperature_tgt, list(sky_ap2.flat))
+    sky_aperature_tgt = np.append(sky_aperature_tgt, list(sky_ap3.flat))
+    sky_aperature_tgt = np.append(sky_aperature_tgt, list(sky_ap4.flat))
+
+
+    sky_flux_tgt_per_pixel = np.median(sky_aperature_tgt)
+  
+
+    ### Subtract the sky flux from the target aperature
+    # sky flux in target's aperature = sky per pixel x area of target aperature
+    # flux from star alone = target flux total - sky flux in target aperature
+
+    sky_flux_in_tgt_ap = tgt_ap_area * sky_flux_tgt_per_pixel
+    tgt_flux_sky_reduced = tgt_flux_total - sky_flux_in_tgt_ap
+
+    # Uncertainty on the target star's flux is taken as the sqrt of its flux (Poisson noise)
+    dtgt_flux = int(math.sqrt(tgt_flux_total))
+
+    # Append values to the plotting arrays
+    tgt_flux_array = np.append(tgt_flux_array,tgt_flux_sky_reduced)
+    dtgt_flux_array = np.append(dtgt_flux_array,dtgt_flux)
+    
+
+
+    #############################
+    #          COMPARISOIN STAR 1 
+    #############################
+
+    # Flux in Comparison Star1
+    comploc = complocs[i].split(',')
+    comploc_x , comploc_y = int(comploc[1]), int(comploc[0])
+    comp_ap = hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]
+    comp_aps = np.append(comp_aps, comp_ap)
+    comp_ap_area = len(list(comp_ap.flat))    
+    comp_flux = sum(list(hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]))
+    comp_flux_total = sum(list(comp_flux.flat))
+
+
+    # Put all sky pixels in an empty array
+    sky_aperature_comp = []
+
+    # Establish sections of the sky aperature, combine, and take the mean of values in the sky region
+    sky_ap1c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x-2.5*FWHM-buffer_space, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap2c = hdulist[0].data[comploc_x+2.5*FWHM+buffer_space:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap3c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y +2.5*FWHM+ buffer_space: comploc_y +2.5*FWHM+ buffer_space+sky_radius]
+    sky_ap4c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y -2.5*FWHM-buffer_space-sky_radius: comploc_y -2.5*FWHM- buffer_space]
+    
+
+    sky_aperature_comp = np.append(sky_aperature_comp, list(sky_ap1c.flat))
+    sky_aperature_comp = np.append(sky_aperature_comp, list(sky_ap2c.flat))
+    sky_aperature_comp = np.append(sky_aperature_comp, list(sky_ap3c.flat))
+    sky_aperature_comp = np.append(sky_aperature_comp, list(sky_ap4c.flat))
+    sky_flux_comp_per_pixel = np.median(sky_aperature_comp)
+
+    ### Subtract the sky flux from the companion aperature
+    # sky flux in star's aperature = sky per pixel x area of star aperature
+    # flux from star alone = star flux total - sky flux in star aperature
+
+    sky_flux_in_comp_ap = comp_ap_area * sky_flux_comp_per_pixel
+    comp_flux_sky_reduced = comp_flux_total - sky_flux_in_comp_ap
+
+    # Uncertainty on the target star's flux is taken as the sqrt of its flux (Poisson noise)
+    dcomp_flux = int(math.sqrt(comp_flux_total))
+
+    # Append values to the plotting arrays
+    comp_flux_array = np.append(comp_flux_array,comp_flux_sky_reduced)
+    dcomp_flux_array = np.append( dcomp_flux_array, dcomp_flux)
+
+
+
+    ################################
+    #          COMPARISOIN STAR 2
+    #############################
+
+    # Flux in Comparison Star2
+    comploc2 = complocs2[i].split(',')
+    comploc_x, comploc_y = int(comploc2[1]), int(comploc2[0])
+    
+    comp2_ap = hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]
+    comp2_aps = np.append(comp2_aps, comp2_ap)    
+    comp2_ap_area = len(list(comp2_ap.flat))    
+    comp2_flux = sum(list(hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]))
+    comp2_flux_total = sum(list(comp2_flux.flat))
+
+
+    # Put all sky pixels in an empty array
+    sky_aperature_comp2 = []
+
+    # Establish sections of the sky aperature, combine, and take the mean of values in the sky region
+    sky_ap1c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x-2.5*FWHM-buffer_space, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap2c = hdulist[0].data[comploc_x+2.5*FWHM+buffer_space:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap3c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y +2.5*FWHM+ buffer_space: comploc_y +2.5*FWHM+ buffer_space+sky_radius]
+    sky_ap4c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y -2.5*FWHM-buffer_space-sky_radius: comploc_y -2.5*FWHM- buffer_space]
+    sky_aperature_comp2 = np.append(sky_aperature_comp2, list(sky_ap1c.flat))
+    sky_aperature_comp2 = np.append(sky_aperature_comp2, list(sky_ap1c.flat))
+    sky_aperature_comp2 = np.append(sky_aperature_comp2, list(sky_ap1c.flat))
+    sky_aperature_comp2 = np.append(sky_aperature_comp2, list(sky_ap1c.flat))
+    sky_flux_comp2_per_pixel = np.median(sky_aperature_comp2)
+
+    ### Subtract the sky flux from the companion aperature
+    # sky flux in star's aperature = sky per pixel x area of star aperature
+    # flux from star alone = star flux total - sky flux in star aperature
+
+    sky_flux_in_comp2_ap = comp2_ap_area * sky_flux_comp2_per_pixel
+    comp2_flux_sky_reduced = comp2_flux_total - sky_flux_in_comp2_ap
+
+    # Uncertainty on the target star's flux is taken as the sqrt of its flux (Poisson noise)
+    dcomp2_flux = int(math.sqrt(comp2_flux_total))#+int(math.sqrt(sky_flux_in_comp2_ap))
+
+    # Append values to the plotting arrays
+    comp2_flux_array = np.append(comp2_flux_array,comp2_flux_sky_reduced)
+    dcomp2_flux_array = np.append( dcomp2_flux_array, dcomp2_flux)
+
+
+
+
+    ################################
+    #          COMPARISOIN STAR 3
+    #############################
+
+    # Flux in Comparison Star3
+    comploc3 = complocs3[i].split(',')
+    comploc_x, comploc_y = int(comploc3[1]), int(comploc3[0])
+        
+    
+    comp3_ap = hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]
+    comp3_aps = np.append(comp3_aps, comp3_ap)
+    comp3_ap_area = len(list(comp3_ap.flat))    
+    comp3_flux = sum(list(hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]))
+    comp3_flux_total = sum(list(comp3_flux.flat))
+
+
+    # Put all sky pixels in an empty array
+    sky_aperature_comp3 = []
+
+    # Establish sections of the sky aperature, combine, and take the mean of values in the sky region
+    sky_ap1c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x-2.5*FWHM-buffer_space, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap2c = hdulist[0].data[comploc_x+2.5*FWHM+buffer_space:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap3c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y +2.5*FWHM+ buffer_space: comploc_y +2.5*FWHM+ buffer_space+sky_radius]
+    sky_ap4c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y -2.5*FWHM-buffer_space-sky_radius: comploc_y -2.5*FWHM- buffer_space]
+    sky_aperature_comp3 = np.append(sky_aperature_comp3, list(sky_ap1c.flat))
+    sky_aperature_comp3 = np.append(sky_aperature_comp3, list(sky_ap2c.flat))
+    sky_aperature_comp3 = np.append(sky_aperature_comp3, list(sky_ap3c.flat))
+    sky_aperature_comp3 = np.append(sky_aperature_comp3, list(sky_ap4c.flat))
+
+    sky_flux_comp3_per_pixel = np.median(sky_aperature_comp3)
+
+    ### Subtract the sky flux from the companion aperature
+    # sky flux in star's aperature = sky per pixel x area of star aperature
+    # flux from star alone = star flux total - sky flux in star aperature
+
+    sky_flux_in_comp3_ap = comp3_ap_area * sky_flux_comp3_per_pixel
+    comp3_flux_sky_reduced = comp3_flux_total - sky_flux_in_comp3_ap
+
+    # Uncertainty on the target star's flux is taken as the sqrt of its flux (Poisson noise)
+    dcomp3_flux = int(math.sqrt(comp3_flux_total))#+int(math.sqrt(sky_flux_in_comp3_ap))
+
+    # Append values to the plotting arrays
+    comp3_flux_array = np.append(comp3_flux_array, comp3_flux_sky_reduced)
+    dcomp3_flux_array = np.append( dcomp3_flux_array, dcomp3_flux)
+
+
+
+
+    ################################
+    #          COMPARISOIN STAR 4
+    #############################
+
+    # Flux in Comparison Star1
+    comploc4 = complocs4[i].split(',')
+    comploc_x, comploc_y = int(comploc4[1]), int(comploc4[0])
+    comp4_ap = hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]
+    comp4_aps = np.append(comp4_aps, comp4_ap)
+    comp4_ap_area = len(list(comp4_ap.flat))    
+    comp4_flux = sum(list(hdulist[0].data[comploc_x-2.5*FWHM:comploc_x+2.5*FWHM, comploc_y-2.5*FWHM:comploc_y+2.5*FWHM]))
+    comp4_flux_total = sum(list(comp4_flux.flat))
+
+
+    # Put all sky pixels in an empty array
+    sky_aperature_comp4 = []
+
+    # Establish sections of the sky aperature, combine, and take the mean of values in the sky region
+    sky_ap1c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x-2.5*FWHM-buffer_space, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap2c = hdulist[0].data[comploc_x+2.5*FWHM+buffer_space:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y - 2.5*FWHM -buffer_space: comploc_y+2.5*FWHM+buffer_space]
+    sky_ap3c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y +2.5*FWHM+ buffer_space: comploc_y +2.5*FWHM+ buffer_space+sky_radius]
+    sky_ap4c = hdulist[0].data[comploc_x-2.5*FWHM-buffer_space-sky_radius:comploc_x+2.5*FWHM+buffer_space+sky_radius, comploc_y -2.5*FWHM-buffer_space-sky_radius: comploc_y -2.5*FWHM- buffer_space]
+    sky_aperature_comp4 = np.append(sky_aperature_comp4, list(sky_ap1c.flat))
+    sky_aperature_comp4 = np.append(sky_aperature_comp4, list(sky_ap1c.flat))
+    sky_aperature_comp4 = np.append(sky_aperature_comp4, list(sky_ap1c.flat))
+    sky_aperature_comp4 = np.append(sky_aperature_comp4, list(sky_ap1c.flat))
+    sky_flux_comp4_per_pixel = np.median(sky_aperature_comp4)
+
+    ### Subtract the sky flux from the companion aperature
+    # sky flux in star's aperature = sky per pixel x area of star aperature
+    # flux from star alone = star flux total - sky flux in star aperature
+
+    sky_flux_in_comp4_ap = comp4_ap_area * sky_flux_comp4_per_pixel
+    comp4_flux_sky_reduced = comp4_flux_total - sky_flux_in_comp4_ap
+
+    # Uncertainty on the target star's flux is taken as the sqrt of its flux (Poisson noise)
+    dcomp4_flux = int(math.sqrt(comp4_flux_total))#+int(math.sqrt(sky_flux_in_comp4_ap))
+
+    # Append values to the plotting arrays
+    comp4_flux_array = np.append(comp4_flux_array,comp4_flux_sky_reduced)
+    dcomp4_flux_array = np.append( dcomp4_flux_array, dcomp4_flux)
+
+    
+    ##################################################
+    #   AVERAGE OF COMPARSON STARS AS 'COMP_GROUP'
+    ##################################################
+    
+
+    comps_fluxes = comp_flux_sky_reduced, comp2_flux_sky_reduced,comp3_flux_sky_reduced,comp4_flux_sky_reduced
+    avg_flux = np.mean(comps_fluxes)
+    comp_group_flux_array = np.append(comp_group_flux_array, avg_flux)
+    dcomp_group = math.sqrt((dcomp_flux+dcomp2_flux+dcomp3_flux+dcomp4_flux)/4.0)
+    dcomp_group_flux_array = np.append(dcomp_group_flux_array, dcomp_group)
+    
+    #df = tgt_flux_sky_reduced - avg_flux
+    
+    dm1 = -2.5*math.log10(tgt_flux_sky_reduced/avg_flux)
+    dm2 = -2.5*math.log10(avg_flux / tgt_flux_sky_reduced)
+    #dm2 = -2.5*math.log10(tgt_flux_sky_reduced/comp2_flux_sky_reduced)
+    #dm3 = -2.5*math.log10(tgt_flux_sky_reduced/comp3_flux_sky_reduced)
+    #dm4 = -2.5*math.log10(tgt_flux_sky_reduced/comp4_flux_sky_reduced)
+    #dmp = (dm1+dm2+dm3+dm4)/4.0
+    
+
+    dF = np.append(dF, dm1)
+    dM = np.append(dM, dm2)
+
+    
+   
+#def norm(array):
+#    "normalized array = (array[i] - min(array))/ ( max(array) - min(array))"
+#    normed_array = (array-min(array))/(max(array) - min(array))
+#    return normed_array
+def rebindata(array,bin_width):
+    total_full_bins = len(array)/bin_width
+    fractional_bins = len(array)*1.0/(bin_width*1.0)-total_full_bins
+    print("fractional bins = ", fractional_bins)
+    B=total_full_bins
+    w = bin_width
+    binned_data = []
+
+    for b in range(B):
+        binned_point = np.mean(array[b*w:b*w+w])
+        binned_data = np.append(binned_data, binned_point)
+    #add mean of remaining array points: 
+    if fractional_bins != 0.0:
+        binned_data = np.append(binned_data, np.mean(array[b*w+w::]))
+    return binned_data
+
+
+databin4 = rebindata(tgt_flux_array, 4)
+databin6 = rebindata(tgt_flux_array, 6)
+databin10 = rebindata(tgt_flux_array, 10)
+
+binday4 = rebindata(obs_date, 4)
+binday6 = rebindata(obs_date, 6)
+binday10 = rebindata(obs_date, 10)
+
+
+plt.figure()
+plt.plot(obs_date, tgt_flux_array, label = "original binning")
+plt.plot(binday4, databin4, label = "4:1 binning")
+plt.plot(binday6, databin6, label = "6:1 binning")
+plt.plot(binday10, databin10, label = "10:1 binning")
+
+
+plt.xlabel("JD of Obs")
+plt.xlabel("Flux from target")
+plt.legend()
+plt.show()
+
+
+
+# Three subplots sharing both x/y axes
+f, (ax1, ax2, ax3, ax4) = plt.subplots(4, sharex=True, sharey=True)
+ax1.plot(obs_date, tgt_flux_array, label = "original binning")
+ax1.set_title('Various Time binning (orig, 4:1, 6:1, 10:1)')
+ax2.plot(binday4, databin4, label = '4:1 binning', color = 'blue')
+plt.legend()
+
+ax3.plot(binday6, databin6, label = '6:1 binning', color = 'g')
+plt.legend()
+
+ax4.plot(binday10, databin10, label = '10:1 binning', color = 'black')
+
+# Fine-tune figure; make subplots close to each other and hide x ticks for
+# all but bottom plot.
+f.subplots_adjust(hspace=0)
+plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
+plt.show()
+
+
+
+start = 2457344.588
+centroid = 2457344.644
+end  = 2457344.700
+
+
+plt.figure()
+plt.plot(obs_date, tgt_flux_array, label = "Target")
+plt.plot(obs_date,comp_group_flux_array, label = "avg")
+plt.plot(obs_date,comp_flux_array, label = "comp1")
+plt.plot(obs_date,comp2_flux_array, label = "comp2")
+plt.plot(obs_date,comp3_flux_array, label = "comp3")
+plt.plot(obs_date,comp4_flux_array, label = "comp4")
+plt.yscale('log')
+plt.axvline(x=start,  linewidth=.5, color='r', linestyle = 'dashed', label = 'start')
+plt.axvline(x=centroid, linewidth=.5, color='k', label = 'centroid')
+plt.axvline(x=end, linewidth=.5, color='r', linestyle = 'dashed', label = 'end')
+plt.legend()
+
+
+
+
+plt.figure()
+plt.plot( tgt_flux_array, label = "Target")
+plt.plot(comp_group_flux_array, label = "avg")
+plt.plot(comp_flux_array, label = "comp1")
+plt.plot(comp2_flux_array, label = "comp2")
+plt.plot(comp3_flux_array, label = "comp3")
+plt.plot(comp4_flux_array, label = "comp4")
+plt.yscale('log')
+
+plt.legend()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#compsnorm = norm(comp_group_flux_array)
+#tgtnorm = norm(tgt_flux_array)
+#smoothed = movingavg((tgtnorm-compsnorm), 10)
+#smoothdate = movingavg(obs_date, 10)
+#start = 2457344.588
+#centroid = 2457344.644
+#end  = 2457344.700
+#
+#plt.figure()
+#plt.plot(obs_date, dF)
+#plt.title('M-m = -2.5xlog(target flux / avg comp flux) ')
+#plt.axvline(x=start, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'start')
+#plt.axvline(x=centroid, ymin=0, ymax = 1.0, linewidth=.5, color='k', label = 'centroid')
+#plt.axvline(x=end, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'end')
+#plt.show()
+#
+#
+#plt.figure()
+#plt.plot(obs_date, dM)
+#plt.title('m-M = -2.5xlog( avg comp flux / target flux) ')
+#plt.axvline(x=start, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'start')
+#plt.axvline(x=centroid, ymin=0, ymax = 1.0, linewidth=.5, color='k', label = 'centroid')
+#plt.axvline(x=end, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'end')
+#plt.show()
+#
+#
+#
+#
+#plt.figure()
+#plt.plot(obs_date, tgtnorm, label = "Norm WASP33")
+#plt.plot(obs_date, compsnorm, label = "Norm Comp's")
+#plt.axvline(x=start, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'start')
+#plt.axvline(x=centroid, ymin=0, ymax = 1.0, linewidth=.5, color='k', label = 'centroid')
+#plt.axvline(x=end, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'end')
+#plt.title("Normalized LC's for Target and Companions")
+#plt.legend()
+#plt.show()
+#
+## the error bars of the norm'd arrays are added in quadrature
+#quaderr = []
+#for i in range(212): 
+#    a = math.sqrt(math.pow(dtgt_flux_array[i],2) + math.pow(dcomp_group_flux_array[i],2))
+#    quaderr = np.append(quaderr, a)
+#errorbars = norm(quaderr)
+#
+#
+#plt.figure()
+#plt.errorbar(obs_date, tgtnorm-compsnorm, yerr = errorbars, label = "Norm'd")
+#plt.axvline(x=start, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'start')
+#plt.axvline(x=centroid, ymin=0, ymax = 1.0, linewidth=.5, color='k', label = 'centroid')
+#plt.axvline(x=end, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'end')
+#
+#plt.title("Normalized and Reduced by Comparisons")
+#plt.legend()
+#plt.show()
+#
+#
+##plt.figure()
+##plt.plot(obs_date,tgtnorm - compsnorm, label = "Reduction from Avg'd Comps")
+##plt.plot(obs_date, smoothed, label = "Smoothed Reduction")
+##plt.axvline(x=start, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'start')
+##plt.axvline(x=centroid, ymin=0, ymax = 1.0, linewidth=.5, color='k', label = 'centroid')
+##plt.axvline(x=end, ymin=0, ymax = 1.0, linewidth=.5, color='r', label = 'end')
+##plt.legend()
+##plt.title("Normalized Flux LC's")
+##plt.show()
+#
+#
+#smoothed_tgt= movingavg(tgt_flux_array, 10)
+#smoothed_comp = movingavg(comp_group_flux_array, 10)
+## add unct in quad, divid by n
+#for i in range(len(smoothed_tgt)):
+#	dm = -2.5*math.log10(smoothed_tgt[i]/smoothed_comp[i])
+#	dM = np.append(dM, dm)
+
+# We now have the arrays for the fluxes and uncertainties for each star and the 
+# target star. Plot the light curves for the comparision stars. 
+
+#a = plt.plot(obsdate, comp_flux_array, 'r', obsdate, comp2_flux_array
+#plt.figure()
+#plt.plot(obs_date, tgt_flux_array, label = "Target")
+#plt.plot(obs_date, comp_flux_array, label = "Comp 1")
+#plt.plot(obs_date, comp2_flux_array, label = "Comp 2")
+#plt.plot(obs_date, comp3_flux_array, label = "Comp 3")
+#plt.plot(obs_date, comp4_flux_array, label = "Comp 4")
+#plt.title("Light Curves")
+#plt.xlabel(" Observation Date/Time (JD)")
+#plt.ylabel(" Flux")
+#plt.legend()
+#plt.show()
+#
+#plt.figure()
+#plt.errorbar(obs_date, comp_group_flux_array, xerr=0.0, yerr = dcomp_group_flux_array, label = "Avg'd Group")
+##plt.plot(obs_date, comp_group_flux_array)
+#plt.errorbar(obs_date, tgt_flux_array, xerr=0, yerr = dtgt_flux_array, label = "Target Star")
+##plt.plot(obs_date, tgt_flux_array)
+#plt.title("Target and Group")
+#plt.xlabel(" Observation Date/Time (JD)")
+#plt.ylabel(" Flux")
+#plt.legend()
+#plt.show()
+
+#plt.figure()
+#reduced = tgt_flux_array - comp_group_flux_array
+#plt.plot(obs_date, reduced)
+#plt.title("Reduced from average")
+#plt.xlabel(" Observation Date/Time (JD)")
+#plt.ylabel(" Flux")
+#plt.show()
+#
+#
+#smooth_flux = movingavg(reduced, 20)
+#plt.figure()
+#plt.plot(smooth_flux)
+#plt.title("Smoothed tgt flux")
+#plt.show()
+#
+#dip = min(smooth_flux)
+#norm = np.mean(smooth_flux[41:135])
+#deltaflux = 1-dip/norm
+#Radius_star = 1004000.0000000# in km
+#Radius_planet = Radius_star*math.sqrt(deltaflux)
+    ###########################
+    # SHOW THE APERATURE IMAGE
+    ###########################
+    
+    #plt.imshow(tgt_ap)
+    #plt.title("Target Aperature"+str(tgtlocation_x)+str(',')+str(tgtlocation_y))
+    #plt.title("Target Star")
+    #plt.show()
+    #plt.imshow(comp_ap)
+    #plt.title("Comparison Star Aperature"+str(comploc_x)+str(',')+str(comploc_y))
+    #plt.title("Comparison Star")
+    #plt.show()
+    
+    ##########################################
+    #  PHOTOMETRIC CALCULATIONS AND MAGNITUDES
+    ##########################################
+    
+    # Airmass was initially at 1.277 for this observation session
+    #airmass_start = 1.277
+    # The known magnitude of the comparison star was 9.37 +- 0.02
+    #Vtrue = 9.37 
+    #Mi_star = -2.5*math.log10(tgt_flux_total*1.0/comp_flux_total*1.0) +9.37
+    
+    
+
+    ###########################################
+    ### CALCULATIONS
+    # Calculate the Mo term for this telescope based on the comparison star's
+    # instrumental and known magnitudes, using the first image
+
+    #if i ==0:
+        #Mo = Vtrue +(1.277*0.25)+ 2.5*math.log10(comp_flux_total)-2.5*math.log10(exp_time)
+    # With the Mo term found, calculate each star's instrumental Vmag
+    #Vtgt_inst = Mo-airmass_start*.25+(-2.5*math.log10(tgt_flux_total)+2.5*math.log10(exp_time))
+    #Vcomp_inst = Mo - airmass_start*.25 +(-2.5*math.log10(comp_flux_total)+2.5*math.log10(exp_time))
+    # The difference between the comparison star's true and instrumental magnitude is the 
+    # offset correction to apply to the target star's instrumental magnitude to find its true magnitude.
+    #Vcorrection = Vcomp_inst-9.37
+    #Vtgt_true = Vtgt_inst+Vcorrection
+
+    ##########################################
+    ### SHOW ALL CALCUATED VALUES
+    # Terminal print out of all calcuated values for this image
+    #print(imlist[i], '  ', tgt_flux_total, '  ', d_tgt_flux, '   ',sky_flux_tgt,'  ', comp_flux_total, ' ', d_comp_flux, '   ', sky_flux_comp, '  ' ,Vtgt_true, '', obsdate)
+    
+    ################################################
+    #  WRITE VARIABLES TO A COMMA DELIMITED TEXT FILE
+    #photodata = str(imlist[i]+','+str(tgt_flux_total)+','+ str(d_tgt_flux)+','+str(sky_flux_tgt)+','+ str(comp_flux_total)+','+str(d_comp_flux)+','+str(sky_flux_comp)+','+str(Vtgt_true)+','+str(obsdate)+'\n')
+    #photometry_data.write(photodata)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

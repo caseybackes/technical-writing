@@ -1,0 +1,246 @@
+
+Conversation opened. 4 messages. All messages read.
+
+
+Skip to content
+Using University of Colorado Boulder Mail with screen readers
+to: webster.cash@colorado.edu 
+20 of about 59
+KOI 5059, "Ripple" phenomenon
+Inbox
+x
+
+Casey Backes <Casey.Backes@colorado.edu>
+Attachments
+Thu, Apr 16, 2015, 8:09 PM
+to Anthony, Webster, Avery
+
+Anthony, 
+We thought you may be interested. We'd be interested to get your feedback. 
+Image and python script attached. 
+Inline image 1
+
+
+Respectfully, 
+
+2 Attachments
+
+Webster Cash
+Fri, Apr 17, 2015, 9:23 AM
+It occurs to me that synchronous rotation in highly elliptical orbit means keeping one side to star during the periastron sweep. 3 days seems about right. Web F
+
+Anthony Harness <Anthony.Harness@colorado.edu>
+Fri, Apr 17, 2015, 9:54 AM
+to Webster, Casey.Backes, Anthony, Avery
+
+We could also be seeing intrinsic variability of the host star. If we don’t want to settle for such a boring explanation, perhaps it is variability induced by tidal effects from the large and close-approaching KOI?
+
+--------------------------------------------------------------
+Anthony 
+
+
+On Apr 17, 2015, at 9:22 AM, Webster Cash <webster.cash@colorado.edu> wrote:
+
+It occurs to me that synchronous rotation in highly elliptical orbit means keeping one side to star during the periastron sweep. 3 days seems about right.
+Web
+ 
+From: Casey Backes [mailto:Casey.Backes@Colorado.EDU] 
+Sent: Thursday, April 16, 2015 9:09 PM
+To: Anthony Harness
+Cc: Webster Cash; Avery Lemons
+Subject: KOI 5059, "Ripple" phenomenon
+ 
+Anthony, 
+We thought you may be interested. We'd be interested to get your feedback. 
+Image and python script attached. 
+<image001.png>
+
+
+Webster Cash <webster.cash@colorado.edu>
+Fri, Apr 17, 2015, 12:06 PM
+to Anthony, Casey.Backes, Avery
+
+Its hard to imagine a non-supergiant star that could ring on that timescale.  And aligning the ring so it folds neatly with the planet period is even tougher.  I’m going to stick with planet rotation – at least for now.
+
+Web
+
+ 
+
+From: Anthony Harness [mailto:Anthony.Harness@Colorado.EDU] 
+Sent: Friday, April 17, 2015 10:54 AM
+To: Webster Cash
+Cc: Casey.Backes@Colorado.EDU; Anthony Harness; Avery Lemons
+Subject: Re: KOI 5059, "Ripple" phenomenon
+
+
+
+import kplr 
+import matplotlib.pyplot as plt
+import scipy.stats as st
+from PyAstronomy.pyasl import foldAt
+from PyAstronomy.pyasl import binningx0dt
+import math
+import numpy as np
+import os
+global os
+
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredText
+
+##############################################
+def EstablishKOI():
+    '''This function will let you choose what KOI in your chosen system to investigate.
+    '''
+    global koi,usercall,period
+    client = kplr.API()
+    koi = client.koi(5059.01)
+    period = koi.koi_period
+           
+############################################
+def Normalize_LightCurves():
+    global centroids
+    # based on user input, declare the operation to acquire the light curve data. 
+    print"Working..."
+    lcs = koi.get_light_curves(short_cadence = True, clobber = True)
+
+    # Initiate empty arrays into which we append data from MAST
+    # time array - used extensively for data plotting and model plotting
+    # flux array - used to build the fluxmean, fluxmean2 arrays
+    # fluxmean(2) arrays - used for data plotting and normalization. 
+    # data array - a copy of the fluxmean2 array used for plotting lc data. 
+    global time, data
+    
+    time,data = [],[]#flux,fluxmean,fluxmean2,data =[],[],[],[],[]
+    for lc in lcs:
+        with lc.open() as f:
+            
+            hdu_data=f[1].data
+            time=np.append(time,hdu_data["time"])
+            #flux=np.append(flux,(hdu_data["pdcsap_flux"]))
+            #fluxmean=np.append(fluxmean, (hdu_data['pdcsap_flux'])/(np.nanmean(hdu_data["pdcsap_flux"])))
+            # Fluxmean2 is for finding the base intensity of the host star. 
+            #fluxmean2=np.append(fluxmean2, (hdu_data['pdcsap_flux'])/(np.nanmean(hdu_data["pdcsap_flux"])))
+            data    = np.append(data,      (hdu_data['pdcsap_flux'])/(np.nanmean(hdu_data["pdcsap_flux"])))
+    print "Complete."
+    print "Generating plot of normalized, preconditioned data."
+    ###############################################     
+    '''
+    Fix all the values in the time array to be numbers on cadence with the 
+    time interval of the data. There are several sections in the time array that
+    are huge groups of NaN's. These need to be fixed. For each index in the time
+    array, if it is a nan, re-declare it to be time[i-1]+ (time interval). This 
+    should fix all NaN's in the time array.   
+    '''   
+    for i in range(len(time)): 
+        if np.isnan(time[i]) == True:
+            # point = previous time  +   time interval
+            time[i] =  time[i-1]     +  (time[5]-time[4])
+    ###################################################   
+    '''
+    Establish vertical lines in the plot to show the transits by first finding the 
+    time values for the centroids of each transit. This is found by by adding the
+    "first observed centriod" (as given by MAST) plus an iteration times the period, 
+    for each iteration that goes from 1 to the expected number of transits. The 
+    expected number of transits is found by dividing the number of days that Kepler 
+    operated for the primary mission, divided by the period of the KOI in question. 
+    The number of expected transits will be larger for smaller-period KOI.
+    At each of these "centroid" times, a vertical line is placed on the plot from 
+    y = 1 to y = (lowest observed flux value, or "min(y)"). 
+    '''
+    centroids = []
+    for i in np.arange(0,max(time)/period):
+        nextCentroid = koi.koi_time0bk+i*period
+        if nextCentroid < max(time):
+            centroids = np.append(centroids, nextCentroid)
+    print "centriod list:", centroids
+    
+    try:
+        # state the uncertainty of the duration as what is found by MAST. 
+        durationErr1 = round(koi.koi_duration_err1,1)
+        if type(durationErr1) =="NoneType":
+            print "none type for durration error 1"
+            durationErr1 = str("?")
+    except TypeError:
+        # if the duration error is not given by MAST, take it as the square root of the duration ( in hours).
+        durationErr1 = str("$\pm$ "+str(round(math.sqrt(koi.koi_duration),1)))
+    ###############################################
+    '''
+    The plot of the normalized light curves:
+    '''
+    
+    def PhaseFolderOfAwesomeness():
+        global phases,data2
+        # Obtain the phases with respect to some
+        # reference point (in this case T0=first centroid time plus a half-period)
+        phases = foldAt(time, period, T0=(koi.koi_time0bk+period/2))
+        # Sort with respect to phase
+        #     First, get the order of indices ...
+        sortIndi = np.argsort(phases)
+        # ... and, second, rearrange the arrays.
+        phases = phases[sortIndi]
+        data2 = data[sortIndi]
+        
+        # Plot the result
+        plt.figure(figsize=(24,14))    # REALLY big figure size  :)
+        plt.plot(phases, data2, 'bp')
+        # a horizontal line that shows the "1" value:
+        plt.hlines(1.0000,0,1,'r',label="Flux = '1'")
+        plt.title("Phase-Folded Light Curves for KOI {}".format(koi))
+        plt.xlabel("Phase Position ( 0 to 1)")
+        plt.ylabel("Normalized Flux")
+        ax = plt.gca()
+        ax.get_xaxis().get_major_formatter().set_useOffset(False)
+        KOI_Properties = AnchoredText("            Characteristics\nPeriod: {} days\nFirst Centroid: {} days\nDisposition: {}\nDuration: {}$\pm$ {} hours\nKepID: {}".format(round(period,1), round(koi.koi_time0bk,1),koi.koi_disposition,round(koi.koi_duration,2),durationErr1,koi.kepid),loc= 2, prop=dict(size = 10),frameon=True)
+        KOI_Properties.patch.set_boxstyle("round, pad = 0.5,rounding_size= 0.2")
+        plt.gca().add_artist(KOI_Properties)
+    
+        plt.legend()
+        plt.show()
+    # execute this function
+    PhaseFolderOfAwesomeness()
+    
+    def RegularLC_Plot():
+        plt.figure(figsize=(24,14))    # REALLY big figure size  :)
+        plt.plot(time,data,label ='Normalized Flux')
+
+        # a horizontal line that shows the "1" value:
+        plt.hlines(1.0000,min(time), max(time),'r')
+        
+        # Make it fancy!
+        plt.title("Light Curves for KOI {}".format(koi))
+        plt.xlabel("BJD minus 2455200 (days)")
+        plt.ylabel("Normalized Flux Intensity")
+        ax = plt.gca()
+        ax.get_xaxis().get_major_formatter().set_useOffset(False)
+        KOI_Properties = AnchoredText("            Characteristics\nPeriod: {} days\nFirst Centroid: {} days\nDisposition: {}\nDuration: {} {} hours\nKepID: {}".format(round(period,1), round(koi.koi_time0bk,1),koi.koi_disposition,round(koi.koi_duration,2),durationErr1,koi.kepid),loc= 2, prop=dict(size = 10),frameon=True)
+        KOI_Properties.patch.set_boxstyle("round, pad = 0.5,rounding_size= 0.2")
+        plt.gca().add_artist(KOI_Properties)
+    
+        plt.legend()
+        plt.show()
+    # execute this function:    
+    RegularLC_Plot()
+    
+    
+    
+    ###############################################
+def main():
+    EstablishKOI()
+    Normalize_LightCurves()
+main()
+indexlist = list(xrange(len(time)))
+datalist = list(data)
+datalist2 = list(data*1.002)
+
+plt.figure(figsize = (18,6) )
+plt.plot(indexlist[5250:5250+30164],datalist[5250:5250+30164],'b',label = 'Between 1st and 2nd transits')
+plt.plot(indexlist[5250:5250+30164],datalist2[35414:35414+30164],'r',label= 'Between 2nd and 3rd transits')
+plt.ylim(ymax = 1.006, ymin = 0.996)
+plt.xlim(xmax = 29000, xmin = 19000)
+plt.title(" 'Ripple' Phenomenon in KOI 5059.01")
+plt.figtext(.02,.02,'There appears to be a semi-periodic "ripple" effect permeating the time between transits Could this be a sign of the KOIs rotational period?')
+plt.legend()
+
+plt.figure()
+plt.plot(indexlist[5250:5250+30164],datalist[5250:5250+30164],'b',indexlist[5250:5250+30164],datalist2[35414:35414+30164],'r')
+KOI5059Ripple.py
+Displaying KOI5059Ripple.py.
